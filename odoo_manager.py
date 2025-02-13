@@ -162,7 +162,7 @@ class OdooManagerApp(QWidget):
             self.connect_button.setEnabled(True)
 
     def stop_docker(self):
-        self.docker_thread = DockerComposeThread(["docker-compose", "down"], cwd=os.getcwd())
+        self.docker_thread = DockerComposeThread(["docker-compose", "down", "--volumes"], cwd=os.getcwd())
         self.docker_thread.log_output.connect(self.log)
         self.docker_thread.start()
         self.stop_button.setEnabled(False)
