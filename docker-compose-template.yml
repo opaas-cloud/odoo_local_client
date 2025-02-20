@@ -1,4 +1,3 @@
-version: '3.1'
 services:
   web:
     image: {{ODOO_IMAGE}}
@@ -11,6 +10,7 @@ services:
       - USER=odoo
       - PASSWORD=myodoo
     volumes:
+      - odoo-web-data:/var/lib/odoo # Remove when using OPaaS images
       - {{REPO_PATH}}:/mnt/extra-addons
   mydb:
     image: postgres:15
@@ -18,3 +18,9 @@ services:
       - POSTGRES_DB=postgres
       - POSTGRES_PASSWORD=myodoo
       - POSTGRES_USER=odoo
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+
+volumes:
+  odoo-web-data:
+  odoo-db-data:
