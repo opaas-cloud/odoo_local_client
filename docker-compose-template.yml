@@ -1,7 +1,7 @@
 version: '3.1'
 services:
   web:
-    image: odoo:{{ODOO_VERSION}}
+    image: {{ODOO_IMAGE}}
     depends_on:
       - mydb
     ports:
