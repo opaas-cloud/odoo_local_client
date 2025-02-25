@@ -27,7 +27,7 @@ class DockerComposeThread(QThread):
         try:
             compose_file = os.path.join(os.getcwd(), DOCKER_COMPOSE_FILE)
             if not os.path.exists(compose_file):
-                self.log_output.emit(f"Fehler: Docker-Compose Datei nicht gefunden: {compose_file}")
+                self.log_output.emit(f"Error: Cant find docker-compose file: {compose_file}")
                 return
 
             process = subprocess.Popen(self.command, cwd=os.getcwd(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -39,9 +39,9 @@ class DockerComposeThread(QThread):
             process.wait()
             self.finished_signal.emit(process.returncode == 0)
         except FileNotFoundError:
-            self.log_output.emit("Fehler: Docker Compose nicht gefunden! Stelle sicher, dass Docker installiert ist.")
+            self.log_output.emit("Error: Docker Compose not found! Make sure, docker is installed and running")
         except Exception as e:
-            self.log_output.emit(f"Fehler: {str(e)}")
+            self.log_output.emit(f"Error: {str(e)}")
 
 
 def find_odoo_addons_paths(base_path):
@@ -96,9 +96,9 @@ class OdooManagerApp(QWidget):
             widget.setVisible(False)
 
         self.repo_path = QLineEdit(self)
-        self.browse_button = QPushButton("Repository Pfad auswählen", self)
+        self.browse_button = QPushButton("Select Odoo Addons path", self)
         self.browse_button.clicked.connect(self.select_repo_path)
-        layout.addWidget(QLabel("Lokaler Repository-Pfad:"))
+        layout.addWidget(QLabel("Local Odoo addons path:"))
         layout.addWidget(self.repo_path)
         layout.addWidget(self.browse_button)
 
@@ -116,12 +116,12 @@ class OdooManagerApp(QWidget):
         self.reset_button.setEnabled(False)
         layout.addWidget(self.reset_button)
 
-        self.connect_button = QPushButton("Verbinden", self)
+        self.connect_button = QPushButton("Connect", self)
         self.connect_button.clicked.connect(self.open_browser)
         self.connect_button.setEnabled(False)
         layout.addWidget(self.connect_button)
 
-        self.save_button = QPushButton("Speichern", self)
+        self.save_button = QPushButton("Save", self)
         self.save_button.clicked.connect(self.save_config)
         layout.addWidget(self.save_button)
 
@@ -150,15 +150,15 @@ class OdooManagerApp(QWidget):
         process = subprocess.run(["docker", "login", "--username", username, "--password", password],
                                  capture_output=True, text=True)
         if process.returncode == 0:
-            QMessageBox.information(self, "Erfolg", "Docker Login erfolgreich!")
+            QMessageBox.information(self, "Success", "Login Successful")
         else:
-            QMessageBox.critical(self, "Fehler", f"Docker Login fehlgeschlagen: {process.stderr}")
+            QMessageBox.critical(self, "Error", f"Docker Login failed: {process.stderr}")
 
     def select_repo_path(self):
-        folder = QFileDialog.getExistingDirectory(self, "Wähle Repository-Pfad")
+        folder = QFileDialog.getExistingDirectory(self, "Choose Odoo Addons path")
         if folder:
             self.repo_path.setText(folder)
-            self.log(f"Repository Pfad gesetzt: {folder}")
+            self.log(f"Addons path set: {folder}")
 
     def save_config(self):
         config = {
@@ -171,8 +171,8 @@ class OdooManagerApp(QWidget):
         }
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f)
-        self.log("Konfiguration gespeichert!")
-        QMessageBox.information(self, "Gespeichert", "Konfiguration gespeichert!")
+        self.log("Configuration saved")
+        QMessageBox.information(self, "saved", "Configuration saved!")
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -185,7 +185,7 @@ class OdooManagerApp(QWidget):
                 self.docker_repo.setText(config.get("docker_repo", ""))
                 self.docker_tag.setText(config.get("docker_tag", ""))
         else:
-            self.log("Konfigurationsdatei nicht gefunden, eine neue wird erstellt.")
+            self.log("Configuration file not found, new one will be created.")
             self.save_config()
 
     def generate_odoo_conf(self, addons_paths):
