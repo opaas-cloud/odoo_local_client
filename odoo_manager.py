@@ -44,6 +44,16 @@ class DockerComposeThread(QThread):
             self.log_output.emit(f"Fehler: {str(e)}")
 
 
+def find_odoo_addons_paths(base_path):
+    addons_paths = set()  # Use a set to avoid duplicate paths
+    for root, dirs, files in os.walk(base_path):
+        # Check if the directory contains both __init__.py and __manifest__.py
+        if "__init__.py" in files and "__manifest__.py" in files:
+            # Add the parent directory as an addons path
+            addons_paths.add(os.path.dirname(root))
+    return list(addons_paths)  # Convert the set to a list
+
+
 class OdooManagerApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -178,29 +188,86 @@ class OdooManagerApp(QWidget):
             self.log("Konfigurationsdatei nicht gefunden, eine neue wird erstellt.")
             self.save_config()
 
+    def generate_odoo_conf(self, addons_paths):
+        # Define the paths for the sample and final configuration files
+        sample_conf_path = os.path.join(os.getcwd(), "odoo.conf.sample")
+        final_conf_path = os.path.join(os.getcwd(), "odoo.conf")
+
+        # Check if the sample configuration file exists
+        if not os.path.exists(sample_conf_path):
+            self.log("Error: Sample configuration file (odoo.conf.sample) not found!")
+            return None
+
+        # Read the sample configuration file
+        with open(sample_conf_path, "r") as f:
+            sample_content = f.read()
+
+        # Replace host paths with container paths
+        container_addons_paths = []
+        for path in addons_paths:
+            # Map the host path to the container path
+            if path.startswith(self.repo_path.text()):  # Check if the path is under the repo directory
+                # Replace the host repo path with the container mount path
+                container_path = path.replace(self.repo_path.text(), "/mnt/extra-addons")
+                container_addons_paths.append(container_path)
+            else:
+                # If it's not under the repo directory, keep it as is (e.g., default paths)
+                container_addons_paths.append(path)
+
+        # Join the container paths into a comma-separated string
+        addons_paths_str = ",".join(container_addons_paths)
+
+        # Replace the placeholder with the container addons paths
+        final_content = sample_content.replace("{{ADDONS_PATH}}", addons_paths_str)
+
+        # Write the final configuration to odoo.conf
+        with open(final_conf_path, "w") as f:
+            f.write(final_content)
+
+        # Log the creation of the odoo.conf file
+        self.log(f"Odoo configuration file created: {final_conf_path}")
+        return final_conf_path
+
     def generate_docker_compose(self):
+        # Get the repository path from the UI
         repo_path = self.repo_path.text()
         compose_path = os.path.join(os.getcwd(), DOCKER_COMPOSE_FILE)
 
+        # Check if the Docker template exists
         if not os.path.exists(DOCKER_TEMPLATE):
-            self.log("Fehler: Docker-Compose Template nicht gefunden!")
+            self.log("Error: Docker Compose template not found!")
             return
 
+        # Read the Docker template content
         with open(DOCKER_TEMPLATE, "r") as f:
             template_content = f.read()
 
+        # Determine the Odoo image based on the selected flavor
         if self.odoo_flavor.currentText() == "Enterprise":
             odoo_image = f"{self.docker_repo.text()}:{self.docker_tag.text()}"
         else:
             odoo_image = f"odoo:{self.odoo_version.currentText()}"
 
+        # Find all Odoo addons paths
+        addons_paths = find_odoo_addons_paths(repo_path)
+        addons_paths.append("/mnt/extra-addons")  # Add the default addons path
+
+        # Generate the odoo.conf file
+        conf_path = self.generate_odoo_conf(addons_paths)
+        if not conf_path:
+            return  # Stop if the configuration file could not be generated
+
+        # Replace placeholders in the Docker template
         docker_compose_content = template_content.replace("{{ODOO_IMAGE}}", odoo_image)
         docker_compose_content = docker_compose_content.replace("{{REPO_PATH}}", repo_path)
+        docker_compose_content = docker_compose_content.replace("{{ODOO_CONF_PATH}}", os.path.abspath(conf_path))
 
+        # Write the final Docker Compose file
         with open(compose_path, "w") as f:
             f.write(docker_compose_content)
 
-        self.log(f"Docker-Compose Datei mit Odoo Image {odoo_image} erstellt.")
+        # Log the creation of the Docker Compose file
+        self.log(f"Docker Compose file created with Odoo image: {odoo_image}")
 
     def start_docker(self):
         self.generate_docker_compose()
@@ -218,7 +285,7 @@ class OdooManagerApp(QWidget):
             self.connect_button.setEnabled(True)
 
     def stop_docker(self):
-        self.docker_thread = DockerComposeThread(["docker-compose", "down", "--volumes"], cwd=os.getcwd())
+        self.docker_thread = DockerComposeThread(["docker-compose", "down"], cwd=os.getcwd())
         self.docker_thread.log_output.connect(self.log)
         self.docker_thread.start()
         self.stop_button.setEnabled(False)

@@ -5,13 +5,14 @@ services:
       - mydb
     ports:
       - "8069:8069"
+    volumes:
+      - odoo-web-data:/var/lib/odoo
+      - {{REPO_PATH}}:/mnt/extra-addons
+      - {{ODOO_CONF_PATH}}:/etc/odoo/odoo.conf  # Mount the odoo.conf file
     environment:
       - HOST=mydb
       - USER=odoo
       - PASSWORD=myodoo
-    volumes:
-      - odoo-web-data:/var/lib/odoo # Remove when using OPaaS images
-      - {{REPO_PATH}}:/mnt/extra-addons
   mydb:
     image: postgres:15
     environment:
