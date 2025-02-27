@@ -7,11 +7,18 @@ import webbrowser
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                              QLabel, QLineEdit, QFileDialog, QMessageBox, QTextEdit, QComboBox, QDialog, QFormLayout)
-from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot, QProcess
 
 import psutil
 import time
 import platform
+
+CONFIG_FILE = resource_path("config.json")
+DOCKER_TEMPLATE = resource_path("docker-compose-template.yml")
+DOCKER_COMPOSE_FILE = resource_path("docker-compose.yml")
+ODOO_CONF_SAMPLE = resource_path("odoo.conf.sample")
+ODOO_VERSIONS = ["16.0", "17.0", "18.0"]
+ODOO_FLAVORS = ["Community", "Enterprise"]
 
 
 def is_docker_running():
@@ -62,13 +69,84 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-CONFIG_FILE = resource_path("config.json")
-DOCKER_TEMPLATE = resource_path("docker-compose-template.yml")
-DOCKER_COMPOSE_FILE = resource_path("docker-compose.yml")
-ODOO_CONF_SAMPLE = resource_path("odoo.conf.sample")
-ODOO_VERSIONS = ["16.0", "17.0", "18.0"]
-ODOO_FLAVORS = ["Community", "Enterprise"]
 
+class DockerComposeLogsThread(QThread):
+    log_output = pyqtSignal(str)
+
+    def __init__(self, cwd, parent=None):
+        super().__init__(parent)
+        self.cwd = cwd
+        self.process = None
+        self._running = True
+
+    def run(self):
+        try:
+            # Startet docker-compose logs im Follow-Modus
+            self.process = subprocess.Popen(
+                ["docker-compose", "logs", "-f"],
+                cwd=self.cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                shell=(sys.platform == "win32")
+            )
+            while self._running:
+                line = self.process.stdout.readline()
+                if not line:
+                    break
+                self.log_output.emit(line.strip())
+            # Schließe die Streams
+            self.process.stdout.close()
+            self.process.stderr.close()
+            self.process.wait()
+        except Exception as e:
+            self.log_output.emit(f"Error: {str(e)}")
+
+    def stop(self):
+        self._running = False
+        if self.process:
+            self.process.terminate()
+
+
+class DockerLogsDialog(QDialog):
+    def __init__(self, cwd, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Odoo Log")
+        self.resize(600, 400)
+
+        layout = QVBoxLayout(self)
+        self.text_edit = QTextEdit(self)
+        self.text_edit.setReadOnly(True)
+        layout.addWidget(self.text_edit)
+
+        # QProcess initialisieren und konfigurieren
+        self.process = QProcess(self)
+        self.process.setProgram("docker-compose")
+        self.process.setArguments(["logs", "-f"])
+        self.process.setWorkingDirectory(cwd)
+
+        # Verbinde die Ready-Signale mit den Handlern
+        self.process.readyReadStandardOutput.connect(self.handle_stdout)
+        self.process.readyReadStandardError.connect(self.handle_stderr)
+
+        # Starte den Log-Prozess
+        self.process.start()
+
+    def handle_stdout(self):
+        data = self.process.readAllStandardOutput()
+        text = bytes(data).decode("utf-8")
+        self.text_edit.append(text)
+
+    def handle_stderr(self):
+        data = self.process.readAllStandardError()
+        text = bytes(data).decode("utf-8")
+        self.text_edit.append(text)
+
+    def closeEvent(self, event):
+        if self.process.state() == QProcess.ProcessState.Running:
+            self.process.terminate()
+            self.process.waitForFinished(3000)
+        event.accept()
 
 class DockerComposeThread(QThread):
     log_output = pyqtSignal(str)
@@ -184,6 +262,11 @@ class OdooManagerApp(QWidget):
         self.connect_button.setEnabled(False)
         layout.addWidget(self.connect_button)
 
+        self.odoo_log_button = QPushButton("Odoo Log", self)
+        self.odoo_log_button.clicked.connect(self.show_odoo_log)
+        self.odoo_log_button.setEnabled(False)
+        layout.addWidget(self.odoo_log_button)
+
         self.save_button = QPushButton("Save", self)
         self.save_button.clicked.connect(self.save_config)
         layout.addWidget(self.save_button)
@@ -197,6 +280,13 @@ class OdooManagerApp(QWidget):
         self.setWindowTitle("OPaaS Odoo Manager")
         self.setWindowIcon(QIcon(resource_path("icon.png")))
         self.resize(1000, 700)
+
+    def show_odoo_log(self):
+        """
+        Öffnet einen neuen Dialog, der den docker-compose Logstream (Odoo Logs) anzeigt.
+        """
+        self.log_dialog = DockerLogsDialog(os.getcwd(), self)
+        self.log_dialog.show()
 
     def toggle_enterprise_fields(self):
         is_enterprise = self.odoo_flavor.currentText() == "Enterprise"
@@ -266,17 +356,20 @@ class OdooManagerApp(QWidget):
         with open(sample_conf_path, "r") as f:
             sample_content = f.read()
 
-        # Replace host paths with container paths
+        # Konvertiere den in der UI angegebenen Pfad in ein Unix-Format
+        clean_repo_path = self.repo_path.text().replace("\\", "/")
+
         container_addons_paths = []
         for path in addons_paths:
-            # Map the host path to the container path
-            if path.startswith(self.repo_path.text()):  # Check if the path is under the repo directory
+            # Ersetze auch hier Backslashes durch Schrägstriche
+            clean_path = path.replace("\\", "/")
+            if clean_path.startswith(clean_repo_path):  # Check if the path is under the repo directory
                 # Replace the host repo path with the container mount path
-                container_path = path.replace(self.repo_path.text(), "/mnt/extra-addons")
+                container_path = clean_path.replace(clean_repo_path, "/mnt/extra-addons")
                 container_addons_paths.append(container_path)
             else:
                 # If it's not under the repo directory, keep it as is (e.g., default paths)
-                container_addons_paths.append(path)
+                container_addons_paths.append(clean_path)
 
         # Join the container paths into a comma-separated string
         addons_paths_str = ",".join(container_addons_paths)
@@ -291,7 +384,6 @@ class OdooManagerApp(QWidget):
         # Log the creation of the odoo.conf file
         self.log(f"Odoo configuration file created: {final_conf_path}")
         return final_conf_path
-
 
     def ensure_docker_running(self):
         """Ensure that Docker is running, and start it if necessary"""
@@ -364,6 +456,7 @@ class OdooManagerApp(QWidget):
             self.stop_button.setEnabled(True)
             self.reset_button.setEnabled(True)
             self.connect_button.setEnabled(True)
+            self.odoo_log_button.setEnabled(True)
 
     def stop_docker(self):
         self.docker_thread = DockerComposeThread(["docker-compose", "down"], cwd=os.getcwd())
@@ -372,6 +465,7 @@ class OdooManagerApp(QWidget):
         self.stop_button.setEnabled(False)
         self.reset_button.setEnabled(False)
         self.connect_button.setEnabled(False)
+        self.odoo_log_button.setEnabled(False)
 
     def reset_docker(self):
         self.docker_thread = DockerComposeThread(["docker-compose", "down", "-v"], cwd=os.getcwd())
@@ -380,6 +474,7 @@ class OdooManagerApp(QWidget):
         self.reset_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.connect_button.setEnabled(False)
+        self.odoo_log_button.setEnabled(False)
 
     def open_browser(self):
         webbrowser.open("http://localhost:8069")
