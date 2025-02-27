@@ -3,13 +3,69 @@ import os
 import subprocess
 import json
 import webbrowser
+
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                              QLabel, QLineEdit, QFileDialog, QMessageBox, QTextEdit, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 
-CONFIG_FILE = "config.json"
-DOCKER_TEMPLATE = "docker-compose-template.yml"
-DOCKER_COMPOSE_FILE = "docker-compose.yml"
+import psutil
+import time
+import platform
+
+
+def is_docker_running():
+    """Check if the Docker daemon is running"""
+    try:
+        process = subprocess.run(["docker", "info"], capture_output=True, text=True)
+        return process.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def start_docker_desktop():
+    """Start Docker Desktop if it is not running (Windows & macOS)"""
+    system = platform.system()
+
+    if system == "Windows":
+        # Check if Docker Desktop is already running
+        for proc in psutil.process_iter(attrs=["name"]):
+            if "Docker Desktop.exe" in proc.info["name"]:
+                return True  # Docker is already running
+
+        # Start Docker Desktop on Windows
+        docker_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+        if os.path.exists(docker_path):
+            subprocess.Popen(docker_path, shell=True)
+            return True
+
+    elif system == "Darwin":  # macOS
+        # Check if Docker is already running
+        for proc in psutil.process_iter(attrs=["name"]):
+            if "Docker" in proc.info["name"]:  # Docker Desktop process
+                return True
+
+        # Start Docker Desktop on macOS
+        subprocess.Popen(["open", "-a", "Docker"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+
+    return False
+
+def resource_path(relative_path):
+    """Get the absolute path to a resource, works for dev and for PyInstaller."""
+    try:
+        # PyInstaller creates a temp folder and stores the path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+
+CONFIG_FILE = resource_path("config.json")
+DOCKER_TEMPLATE = resource_path("docker-compose-template.yml")
+DOCKER_COMPOSE_FILE = resource_path("docker-compose.yml")
+ODOO_CONF_SAMPLE = resource_path("odoo.conf.sample")
 ODOO_VERSIONS = ["16.0", "17.0", "18.0"]
 ODOO_FLAVORS = ["Community", "Enterprise"]
 
@@ -60,6 +116,13 @@ class OdooManagerApp(QWidget):
         self.odoo_running = False
         self.initUI()
         self.load_config()
+
+        # Check if Docker is running
+        if not self.ensure_docker_running():
+            QMessageBox.critical(self, "Docker Error", "Docker is not running and could not be started!")
+            sys.exit(1)  # Exit the app if Docker is not running
+
+
 
     def initUI(self):
         layout = QVBoxLayout()
@@ -132,6 +195,7 @@ class OdooManagerApp(QWidget):
 
         self.setLayout(layout)
         self.setWindowTitle("OPaaS Odoo Manager")
+        self.setWindowIcon(QIcon(resource_path("icon.png")))
         self.resize(1000, 700)
 
     def toggle_enterprise_fields(self):
@@ -190,7 +254,7 @@ class OdooManagerApp(QWidget):
 
     def generate_odoo_conf(self, addons_paths):
         # Define the paths for the sample and final configuration files
-        sample_conf_path = os.path.join(os.getcwd(), "odoo.conf.sample")
+        sample_conf_path = resource_path("odoo.conf.sample")
         final_conf_path = os.path.join(os.getcwd(), "odoo.conf")
 
         # Check if the sample configuration file exists
@@ -227,6 +291,23 @@ class OdooManagerApp(QWidget):
         # Log the creation of the odoo.conf file
         self.log(f"Odoo configuration file created: {final_conf_path}")
         return final_conf_path
+
+
+    def ensure_docker_running(self):
+        """Ensure that Docker is running, and start it if necessary"""
+        if not is_docker_running():
+            self.log("Docker is not running, attempting to start...")
+            if start_docker_desktop():
+                self.log("Docker Desktop started. Waiting for initialization...")
+                for _ in range(30):  # Wait up to 30 seconds
+                    if is_docker_running():
+                        self.log("Docker is now ready.")
+                        return True
+                    time.sleep(2)
+                self.log("Docker could not be started. Please check manually.")
+            else:
+                self.log("Could not find Docker Desktop. Is it installed?")
+        return is_docker_running()
 
     def generate_docker_compose(self):
         # Get the repository path from the UI
